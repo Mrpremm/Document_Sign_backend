@@ -2,7 +2,7 @@ const dotenv = require('dotenv');
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-  console.log('UNCAUGHT EXCEPTION!  Shutting down...');
+  console.log('UNCAUGHT EXCEPTION! 💥 Shutting down...');
   console.log(err.name, err.message);
   process.exit(1);
 });
@@ -21,21 +21,21 @@ mongoose
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-  .then(() => console.log(' MongoDB connection established successfully'))
+  .then(() => console.log('✅ MongoDB connection established successfully'))
   .catch((err) => {
-    console.log('MongoDB connection error:', err);
+    console.log('❌ MongoDB connection error:', err);
     process.exit(1);
   });
 
 // Start server
 const port = process.env.PORT || 5000;
 const server = app.listen(port, () => {
-  console.log(` Server is running on port ${port}`);
+  console.log(`✅ Server is running on port ${port}`);
 });
 
 // Handle unhandled rejections
 process.on('unhandledRejection', (err) => {
-  console.log('UNHANDLED REJECTION! Shutting down...');
+  console.log('UNHANDLED REJECTION! 💥 Shutting down...');
   console.log(err.name, err.message);
   server.close(() => {
     process.exit(1);
@@ -44,8 +44,8 @@ process.on('unhandledRejection', (err) => {
 
 // Handle SIGTERM
 process.on('SIGTERM', () => {
-  console.log('SIGTERM RECEIVED. Shutting down gracefully');
+  console.log('👋 SIGTERM RECEIVED. Shutting down gracefully');
   server.close(() => {
-    console.log(' Process terminated!');
+    console.log('💥 Process terminated!');
   });
 });
