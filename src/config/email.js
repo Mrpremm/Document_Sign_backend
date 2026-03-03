@@ -1,40 +1,42 @@
 const nodemailer = require('nodemailer');
 
 const createTransporter = () => {
-  // Create transporter based on environment
-  if (process.env.NODE_ENV === 'production') {
-    // Production email configuration
+  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
     return nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      secure: process.env.EMAIL_PORT === '465', // true for 465, false for other ports
+      port: parseInt(process.env.EMAIL_PORT) || 587,
+      secure: parseInt(process.env.EMAIL_PORT) === 465, // true only for port 465 (SSL)
+      requireTLS: parseInt(process.env.EMAIL_PORT) !== 465, // STARTTLS for port 587
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },
-    });
-  } else {
-    // Development - use ethereal for testing
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      auth: {
-        user: 'ethereal.user@ethereal.email', // Generate from ethereal.email
-        pass: 'ethereal.password',
+      tls: {
+        rejectUnauthorized: false, // Needed for some Gmail / self-signed cert setups
       },
     });
   }
+
+  // Fallback: log emails to console in development (no real sending)
+  console.warn('⚠️  No email config found in .env — emails will be logged to console only.');
+  return nodemailer.createTransport({
+    jsonTransport: true,
+  });
 };
 
 const transporter = createTransporter();
 
-// Verify transporter connection
-transporter.verify((error, success) => {
-  if (error) {
-    console.error(' Email configuration error:', error);
-  } else {
-    console.log(' Email server is ready to send messages');
-  }
-});
+// Verify the SMTP connection on startup
+if (process.env.EMAIL_HOST) {
+  transporter.verify((error) => {
+    if (error) {
+      console.error('❌ Email configuration error:', error.message);
+      console.error('   → Check EMAIL_HOST, EMAIL_USER, EMAIL_PASS in your .env');
+      console.error('   → For Gmail: use an App Password from https://myaccount.google.com/apppasswords');
+    } else {
+      console.log('✅ Email server is ready to send messages');
+    }
+  });
+}
 
 module.exports = transporter;

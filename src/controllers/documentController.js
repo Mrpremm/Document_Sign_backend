@@ -60,7 +60,7 @@ exports.uploadDocument = catchAsync(async (req, res, next) => {
   // Generate signing tokens for signers
   for (const signer of document.signers) {
     const token = document.generateSigningToken(signer.email);
-    // Store token mapping (in production, use Redis with expiry)
+    // Store token in MongoDB via tokenService
     await tokenService.storeToken(token, {
       documentId: document._id,
       email: signer.email,
@@ -186,6 +186,61 @@ exports.updateDocument = catchAsync(async (req, res, next) => {
   );
 });
 
+// Save signature field positions set in the document viewer UI
+exports.saveSignatureFields = catchAsync(async (req, res, next) => {
+  const { fields } = req.body;
+  const document = await Document.findOne({ _id: req.params.id, owner: req.user.id });
+
+  if (!document) {
+    return next(new AppError('Document not found.', 404));
+  }
+
+  if (document.status !== 'draft') {
+    return next(new AppError('Cannot update signature fields after document has been sent.', 400));
+  }
+
+  // Persist the field data (positions + signature image data + dates)
+  document.signatureFields = Array.isArray(fields) ? fields : [];
+
+  // ── Burn fields into a copy of the PDF ──────────────────────────────────
+  // Regenerate the signed PDF whenever ANY field (signature or date) is present
+  const hasAnyField = document.signatureFields.some(
+    (f) =>
+      (f.type === 'signature' && f.signatureDataUrl) ||
+      (f.type === 'date' && f.dateValue)
+  );
+
+  if (hasAnyField && document.originalFile?.path) {
+    try {
+      const signed = await pdfService.generateSignedPDFFromFields(
+        document.originalFile.path,
+        document.signatureFields
+      );
+
+      // Remove the previous signed file if it exists
+      if (document.signedFile?.path && fs.existsSync(document.signedFile.path)) {
+        try { fs.unlinkSync(document.signedFile.path); } catch {}
+      }
+
+      document.signedFile = {
+        filename: signed.filename,
+        path: signed.path,
+        size: signed.size,
+        signedAt: new Date(),
+      };
+    } catch (err) {
+      // Log but don't fail — field data is still saved to the DB
+      console.error('Failed to generate signed PDF:', err.message);
+    }
+  }
+
+  await document.save();
+
+  res.status(200).json(
+    formatSuccess({ signatureFields: document.signatureFields }, 'Signature fields saved successfully')
+  );
+});
+
 // Send document for signing
 exports.sendDocument = catchAsync(async (req, res, next) => {
   const document = req.document; // From checkDocumentOwnership middleware
@@ -202,19 +257,35 @@ exports.sendDocument = catchAsync(async (req, res, next) => {
   document.status = 'sent';
   await document.save();
 
-  // Send emails to all signers
+  // ── Send signing emails ──────────────────────────────────────────────────
+  // Always generate a fresh token for each signer so that signers added
+  // after the initial upload (via updateDocument) also get an email.
   for (const signer of document.signers) {
-    const token = await tokenService.getToken(document._id, signer.email);
-    const signingUrl = `${process.env.BASE_URL}/api/sign/${token}`;
+    try {
+      // Generate a new token and persist it (overwrites any existing one)
+      const rawToken = tokenService.generateToken();
+      await tokenService.storeToken(rawToken, {
+        documentId: document._id,
+        email: signer.email,
+      });
 
-    await emailService.sendSigningRequest({
-      to: signer.email,
-      signerName: signer.name,
-      documentName: document.title,
-      signingUrl,
-      senderName: req.user.name,
-    });
+      const signingUrl = `${process.env.BASE_URL}/sign/${rawToken}`;
+
+      await emailService.sendSigningRequest({
+        to: signer.email,
+        signerName: signer.name || signer.email,
+        documentName: document.title,
+        signingUrl,
+        senderName: req.user.name,
+      });
+
+      console.log(`✅ Signing email sent to ${signer.email}`);
+    } catch (emailError) {
+      // Log but don't fail the whole request — other signers can still be emailed
+      console.error(`❌ Failed to send signing email to ${signer.email}:`, emailError.message);
+    }
   }
+
 
   // Log document sent
   await AuditLog.log({
@@ -234,7 +305,7 @@ exports.sendDocument = catchAsync(async (req, res, next) => {
   );
 });
 
-// Reject document
+// Reject document (by owner)
 exports.rejectDocument = catchAsync(async (req, res, next) => {
   const { reason } = req.body;
   const document = req.document; // From checkDocumentOwnership middleware
@@ -247,13 +318,19 @@ exports.rejectDocument = catchAsync(async (req, res, next) => {
   document.rejectionReason = reason;
   await document.save();
 
-  // Notify owner
-  await emailService.sendRejectionNotification({
-    to: document.owner.email,
-    documentName: document.title,
-    reason,
-    rejectedBy: req.user.email,
-  });
+  // Notify signers (best effort)
+  for (const signer of document.signers) {
+    try {
+      await emailService.sendRejectionNotification({
+        to: signer.email,
+        documentName: document.title,
+        reason,
+        rejectedBy: document.owner.email || req.user.email,
+      });
+    } catch (err) {
+      console.error('Failed to send rejection email:', err.message);
+    }
+  }
 
   // Log rejection
   await AuditLog.log({
@@ -270,43 +347,6 @@ exports.rejectDocument = catchAsync(async (req, res, next) => {
   );
 });
 
-// Download document
-exports.downloadDocument = catchAsync(async (req, res, next) => {
-  const document = await Document.findById(req.params.id);
-
-  if (!document) {
-    return next(new AppError('Document not found.', 404));
-  }
-
-  // Check ownership
-  if (document.owner.toString() !== req.user.id && req.user.role !== 'admin') {
-    return next(new AppError('You do not have permission to download this document.', 403));
-  }
-
-  // Determine which file to send
-  const filePath = document.status === 'signed' && document.signedFile
-    ? document.signedFile.path
-    : document.originalFile.path;
-
-  // Check if file exists
-  if (!fs.existsSync(filePath)) {
-    return next(new AppError('Document file not found.', 404));
-  }
-
-  // Log download
-  await AuditLog.log({
-    userId: req.user.id,
-    documentId: document._id,
-    action: 'document_downloaded',
-    metadata: { fileType: document.status === 'signed' ? 'signed' : 'original' },
-    ipAddress: req.ip,
-    userAgent: req.get('user-agent'),
-  });
-
-  // Send file
-  res.download(filePath, `${document.title}.pdf`);
-});
-
 // Delete document
 exports.deleteDocument = catchAsync(async (req, res, next) => {
   const document = req.document; // From checkDocumentOwnership middleware
@@ -319,10 +359,14 @@ exports.deleteDocument = catchAsync(async (req, res, next) => {
   // Delete physical files
   try {
     if (document.originalFile && document.originalFile.path) {
-      fs.unlinkSync(document.originalFile.path);
+      if (fs.existsSync(document.originalFile.path)) {
+        fs.unlinkSync(document.originalFile.path);
+      }
     }
     if (document.signedFile && document.signedFile.path) {
-      fs.unlinkSync(document.signedFile.path);
+      if (fs.existsSync(document.signedFile.path)) {
+        fs.unlinkSync(document.signedFile.path);
+      }
     }
   } catch (error) {
     console.error('Error deleting files:', error);
@@ -344,5 +388,52 @@ exports.deleteDocument = catchAsync(async (req, res, next) => {
 
   res.status(200).json(
     formatSuccess(null, 'Document deleted successfully')
+  );
+});
+
+// Stream / download document PDF (authenticated) — serves signed PDF if available, else original
+exports.downloadDocument = catchAsync(async (req, res, next) => {
+  const document = await Document.findOne({ _id: req.params.id, owner: req.user.id });
+
+  if (!document) {
+    return next(new AppError('Document not found.', 404));
+  }
+
+  // Serve signed file if available, otherwise original
+  const filePath = document.signedFile?.path || document.originalFile?.path;
+  if (!filePath || !fs.existsSync(filePath)) {
+    return next(new AppError('File not found on server.', 404));
+  }
+
+  await AuditLog.log({
+    userId: req.user.id,
+    documentId: document._id,
+    action: 'document_downloaded',
+    metadata: { fileType: document.signedFile?.path ? 'signed' : 'original' },
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${document.title}.pdf"`);
+  fs.createReadStream(filePath).pipe(res);
+});
+
+// Get audit logs for a specific document
+exports.getAuditLogs = catchAsync(async (req, res, next) => {
+  // Verify requester owns the document
+  const document = await Document.findOne({ _id: req.params.id, owner: req.user.id });
+
+  if (!document) {
+    return next(new AppError('Document not found.', 404));
+  }
+
+  const AuditLog = require('../models/AuditLog');
+  const logs = await AuditLog.find({ documentId: req.params.id })
+    .populate('userId', 'name email')
+    .sort('-timestamp');
+
+  res.status(200).json(
+    formatSuccess({ logs }, 'Audit logs retrieved successfully')
   );
 });

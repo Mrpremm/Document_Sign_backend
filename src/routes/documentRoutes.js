@@ -23,4 +23,10 @@ router.post('/:id/send', checkDocumentOwnership, documentController.sendDocument
 router.post('/:id/reject', checkDocumentOwnership, documentController.rejectDocument);
 router.get('/:id/download', documentController.downloadDocument);
 
+// Signature fields — save drag-and-drop positions from the document viewer UI
+router.post('/:id/signature-fields', documentController.saveSignatureFields);
+
+// Audit trail for a specific document
+router.get('/:id/audit', documentController.getAuditLogs);
+
 module.exports = router;

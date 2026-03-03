@@ -89,9 +89,6 @@ class PDFService {
         }
       }
 
-      // Add signature page at the end (optional)
-      // await this.addSignaturePage(pdfDoc, signatures);
-
       // Save the modified PDF
       const modifiedPdfBytes = await pdfDoc.save();
       
@@ -105,6 +102,93 @@ class PDFService {
       throw new AppError('Error generating signed PDF', 500);
     }
   }
+
+  /**
+   * Burn signatureFields (from the drag-and-drop viewer UI) into the PDF.
+   *
+   * react-pdf renders at its default scale of 1.0, meaning:
+   *   1 PDF point = 1 CSS pixel
+   * So field positions from the browser are ALREADY in PDF point units.
+   * The only conversion needed is flipping the Y axis:
+   *   Browser: y=0 at TOP,    increases downward
+   *   PDF:     y=0 at BOTTOM, increases upward
+   *
+   *   pdf_y = pageHeight - field.position.y - fieldHeight
+   */
+  async generateSignedPDFFromFields(originalPath, signatureFields) {
+    // Ensure output directory exists
+    const signedDir = path.join(process.cwd(), 'uploads', 'signed');
+    if (!fs.existsSync(signedDir)) {
+      fs.mkdirSync(signedDir, { recursive: true });
+    }
+
+    try {
+      const pdfBytes = fs.readFileSync(originalPath);
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+      for (const field of signatureFields) {
+        const pageIndex = (field.pageNumber || 1) - 1;
+        const page = pdfDoc.getPage(pageIndex);
+        const { height: pageHeight } = page.getSize();
+
+        // Field dimensions — already in PDF points (react-pdf 1pt = 1px at scale 1)
+        const fieldW = field.width || 180;
+        const fieldH = field.height || 60;
+
+        // X is the same in both coordinate systems
+        const pdfX = field.position.x;
+        // Flip Y: browser top-left origin → PDF bottom-left origin
+        const pdfY = pageHeight - field.position.y - fieldH;
+
+        if (field.type === 'signature' && field.signatureDataUrl) {
+          try {
+            // Strip data URL prefix to get raw base64
+            const base64 = field.signatureDataUrl.replace(/^data:image\/\w+;base64,/, '');
+            const imgBytes = Buffer.from(base64, 'base64');
+
+            let img;
+            try {
+              img = await pdfDoc.embedPng(imgBytes);
+            } catch {
+              img = await pdfDoc.embedJpg(imgBytes);
+            }
+
+            page.drawImage(img, {
+              x: pdfX,
+              y: pdfY,
+              width: fieldW,
+              height: fieldH,
+            });
+          } catch (err) {
+            console.error('Could not embed signature image, skipping field:', err.message);
+          }
+
+        } else if (field.type === 'date' && field.dateValue) {
+          const fontSize = 11;
+          page.drawText(field.dateValue, {
+            x: pdfX + 4,
+            y: pdfY + fieldH / 2 - fontSize / 2,
+            size: fontSize,
+            font: helveticaFont,
+            color: rgb(0, 0, 0),
+          });
+        }
+      }
+
+      const modifiedPdfBytes = await pdfDoc.save();
+      const outFilename = `signed-${Date.now()}.pdf`;
+      const outPath = path.join(signedDir, outFilename);
+      fs.writeFileSync(outPath, modifiedPdfBytes);
+
+      return { path: outPath, filename: outFilename, size: modifiedPdfBytes.length };
+    } catch (error) {
+      console.error('Error generating signed PDF from fields:', error);
+      throw new AppError('Error generating signed PDF', 500);
+    }
+  }
+
+
 
   // Draw text signature when image embedding fails
   drawTextSignature(page, text, position, font) {

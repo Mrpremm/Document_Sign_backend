@@ -5,27 +5,41 @@ const auditLogSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      required: false, // Optional — external signers have no account
     },
     documentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Document',
-      required: true,
+      required: false, // Optional — auth events (login, register, etc.) have no document
     },
     action: {
       type: String,
       enum: [
+        // Document actions
         'document_created',
         'document_updated',
         'document_viewed',
         'document_sent',
         'document_signed',
         'document_rejected',
+        'document_deleted',
+        'document_downloaded',
+        // Signature actions
         'signature_added',
         'signature_removed',
+        // Email / token actions
         'email_sent',
         'token_generated',
         'token_verified',
+        // Auth actions
+        'user_registered',
+        'login_success',
+        'login_failed',
+        'logout',
+        'token_refreshed',
+        'password_changed',
+        'password_reset_requested',
+        'password_reset_completed',
       ],
       required: true,
     },

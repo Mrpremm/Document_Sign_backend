@@ -1,102 +1,104 @@
 const crypto = require('crypto');
-// In production, use Redis for token storage
-// const redis = require('../config/redis');
+const mongoose = require('mongoose');
 
+// ---------------------------------------------------------------------------
+// Persistent Token model (stored in MongoDB instead of in-memory Map)
+// ---------------------------------------------------------------------------
+const signTokenSchema = new mongoose.Schema({
+  token: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true,
+  },
+  documentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Document',
+    required: true,
+  },
+  email: {
+    type: String,
+    required: true,
+    lowercase: true,
+  },
+  used: {
+    type: Boolean,
+    default: false,
+  },
+  expiresAt: {
+    type: Date,
+    required: true,
+    index: { expireAfterSeconds: 0 }, // MongoDB TTL — auto-deletes after expiresAt
+  },
+});
+
+const SignToken = mongoose.models.SignToken || mongoose.model('SignToken', signTokenSchema);
+
+// ---------------------------------------------------------------------------
 class TokenService {
-  constructor() {
-    // Simple in-memory store (replace with Redis in production)
-    this.tokenStore = new Map();
-    
-    // Clean up expired tokens every hour
-    setInterval(() => this.cleanupExpiredTokens(), 60 * 60 * 1000);
-  }
-
-  // Generate a secure token
+  // Generate a cryptographically secure random token
   generateToken() {
     return crypto.randomBytes(32).toString('hex');
   }
 
-  // Store token with data
-  async storeToken(token, data, expiryInSeconds = 7 * 24 * 60 * 60) { // 7 days default
-    const expiresAt = Date.now() + (expiryInSeconds * 1000);
-    
-    this.tokenStore.set(token, {
-      ...data,
-      expiresAt,
-      used: false,
-    });
+  // Store token with associated data in MongoDB
+  async storeToken(token, data, expiryInSeconds = 7 * 24 * 60 * 60) {
+    const expiresAt = new Date(Date.now() + expiryInSeconds * 1000);
 
-    // In production with Redis:
-    // await redis.setex(`token:${token}`, expiryInSeconds, JSON.stringify(data));
-    
+    await SignToken.findOneAndUpdate(
+      { token },
+      {
+        token,
+        documentId: data.documentId,
+        email: data.email,
+        used: false,
+        expiresAt,
+      },
+      { upsert: true, new: true }
+    );
+
     return token;
   }
 
-  // Verify and get token data
+  // Verify token and return its data (null if invalid/expired/used)
   async verifyToken(token) {
-    const tokenData = this.tokenStore.get(token);
+    const tokenDoc = await SignToken.findOne({
+      token,
+      used: false,
+      expiresAt: { $gt: new Date() },
+    });
 
-    if (!tokenData) {
-      return null;
-    }
-
-    // Check if expired
-    if (tokenData.expiresAt < Date.now()) {
-      this.tokenStore.delete(token);
-      return null;
-    }
-
-    // Check if already used (for one-time tokens)
-    if (tokenData.used) {
-      return null;
-    }
+    if (!tokenDoc) return null;
 
     return {
-      documentId: tokenData.documentId,
-      email: tokenData.email,
+      documentId: tokenDoc.documentId,
+      email: tokenDoc.email,
     };
   }
 
-  // Mark token as used
+  // Mark token as used (one-time use)
   async invalidateToken(token) {
-    const tokenData = this.tokenStore.get(token);
-    if (tokenData) {
-      tokenData.used = true;
-      this.tokenStore.set(token, tokenData);
-    }
-
-    // In production with Redis:
-    // await redis.del(`token:${token}`);
+    await SignToken.findOneAndUpdate({ token }, { used: true });
   }
 
-  // Get token for a specific document and email
+  // Get the raw token string for a given documentId + email pair
   async getToken(documentId, email) {
-    // Find token in store (inefficient for large stores - use Redis in production)
-    for (const [token, data] of this.tokenStore.entries()) {
-      if (data.documentId === documentId && data.email === email && !data.used) {
-        return token;
-      }
-    }
-    return null;
+    const tokenDoc = await SignToken.findOne({
+      documentId,
+      email: email.toLowerCase(),
+      used: false,
+      expiresAt: { $gt: new Date() },
+    });
+
+    return tokenDoc ? tokenDoc.token : null;
   }
 
-  // Clean up expired tokens
-  cleanupExpiredTokens() {
-    const now = Date.now();
-    for (const [token, data] of this.tokenStore.entries()) {
-      if (data.expiresAt < now) {
-        this.tokenStore.delete(token);
-      }
-    }
-    console.log(`🧹 Cleaned up expired tokens. Current store size: ${this.tokenStore.size}`);
-  }
-
-  // Generate signing URL
+  // Generate a full signing URL
   generateSigningUrl(token, baseUrl) {
-    return `${baseUrl}/api/sign/${token}`;
+    return `${baseUrl}/sign/${token}`;
   }
 
-  // Validate token format
+  // Validate token format (64 hex chars)
   isValidTokenFormat(token) {
     return /^[a-f0-9]{64}$/i.test(token);
   }

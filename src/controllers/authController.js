@@ -5,6 +5,7 @@ const AuditLog = require('../models/AuditLog');
 const AppError = require('../utils/AppError');
 const catchAsync = require('../utils/catchAsync');
 const { formatSuccess } = require('../utils/responseFormatter');
+const emailService = require('../services/emailService');
 
 // Generate tokens
 const signToken = (id) => {
@@ -279,15 +280,25 @@ exports.forgotPassword = catchAsync(async (req, res, next) => {
   const resetToken = user.createPasswordResetToken();
   await user.save({ validateBeforeSave: false });
 
-  // Create reset URL
-  const resetURL = `${process.env.BASE_URL}/api/auth/reset-password/${resetToken}`;
+  // Create reset URL — points to the frontend reset page
+  const resetURL = `${process.env.BASE_URL}/reset-password/${resetToken}`;
 
-  // TODO: Send email with reset URL
-  // await sendEmail({
-  //   email: user.email,
-  //   subject: 'Your password reset token (valid for 10 minutes)',
-  //   message: `Forgot your password? Submit a PATCH request with your new password to: ${resetURL}\nIf you didn't forget your password, please ignore this email!`,
-  // });
+  // Send password reset email
+  try {
+    await emailService.sendPasswordReset({
+      to: user.email,
+      userName: user.name,
+      resetURL,
+    });
+  } catch (emailError) {
+    // Clean up token if email fails so user can try again
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save({ validateBeforeSave: false });
+    return next(
+      new AppError('There was an error sending the email. Please try again later.', 500)
+    );
+  }
 
   // Log password reset request
   await AuditLog.log({
@@ -298,7 +309,7 @@ exports.forgotPassword = catchAsync(async (req, res, next) => {
   });
 
   res.status(200).json(
-    formatSuccess(null, 'Password reset token sent to email!')
+    formatSuccess(null, 'Password reset link sent to your email!')
   );
 });
 

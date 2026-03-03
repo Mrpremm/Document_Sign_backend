@@ -72,7 +72,7 @@ const handleMulterError = (err, req, res, next) => {
   next(err);
 };
 
-// Middleware for single document upload
+// Middleware for single document upload — document field is required
 exports.uploadDocument = (req, res, next) => {
   upload.single('document')(req, res, (err) => {
     if (err) {
@@ -87,17 +87,15 @@ exports.uploadDocument = (req, res, next) => {
   });
 };
 
-// Middleware for signature upload
+// Middleware for optional signature image upload
+// Signatures can also be submitted as base64 strings in the request body,
+// so we do NOT require a file — the controller validates presence of either.
 exports.uploadSignature = (req, res, next) => {
   upload.single('signature')(req, res, (err) => {
     if (err) {
       return handleMulterError(err, req, res, next);
     }
-    
-    if (!req.file) {
-      return next(new AppError('Please upload a signature image.', 400));
-    }
-    
+    // Do not block if no file — base64 signatureData in body is valid
     next();
   });
 };

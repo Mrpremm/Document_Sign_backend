@@ -58,6 +58,25 @@ const documentSchema = new mongoose.Schema(
         ref: 'Signature',
       },
     ],
+    // Signature field positions set by the document owner via the viewer UI
+    signatureFields: [
+      {
+        id: String,
+        // 'signature' or 'date'
+        type: { type: String, enum: ['signature', 'date'], default: 'signature' },
+        pageNumber: { type: Number, default: 1 },
+        position: {
+          x: { type: Number, default: 50 },
+          y: { type: Number, default: 50 },
+        },
+        width: { type: Number, default: 150 },
+        height: { type: Number, default: 50 },
+        // Base64 data URL of the drawn/uploaded signature image
+        signatureDataUrl: { type: String, default: null },
+        // Selected date value for date-type fields (YYYY-MM-DD)
+        dateValue: { type: String, default: null },
+      },
+    ],
     metadata: {
       pageCount: Number,
       fileHash: String, // For integrity verification

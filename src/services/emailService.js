@@ -156,6 +156,60 @@ class EmailService {
       throw error;
     }
   }
+  // Send password reset email
+  async sendPasswordReset({ to, userName, resetURL }) {
+    const subject = 'Reset Your Password (valid for 10 minutes)';
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #f6d365 0%, #fda085 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+          .button { display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+          .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+          .warning { color: #c53030; font-size: 13px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Password Reset Request</h1>
+          </div>
+          <div class="content">
+            <p>Hello ${userName},</p>
+            <p>You requested a password reset. Click the button below to set a new password:</p>
+            <div style="text-align: center;">
+              <a href="${resetURL}" class="button">Reset My Password</a>
+            </div>
+            <p class="warning">⚠️ This link will expire in <strong>10 minutes</strong>.</p>
+            <p>If you did not request a password reset, please ignore this email — your password will remain unchanged.</p>
+            <p>If you're having trouble clicking the button, copy and paste this URL into your browser:</p>
+            <p style="word-break: break-all;"><small>${resetURL}</small></p>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from SignatureSaaS. Please do not reply to this email.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    try {
+      await transporter.sendMail({
+        from: this.from,
+        to,
+        subject,
+        html,
+      });
+      console.log(`✅ Password reset email sent to ${to}`);
+    } catch (error) {
+      console.error('❌ Error sending password reset email:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new EmailService();

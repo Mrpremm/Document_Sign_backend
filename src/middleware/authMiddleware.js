@@ -75,16 +75,18 @@ exports.restrictTo = (...roles) => {
 };
 
 // Check document ownership
+// NOTE: document.owner is populated (an object) when using .populate(), so we compare ._id
 exports.checkDocumentOwnership = catchAsync(async (req, res, next) => {
   const Document = require('../models/Document');
-  const document = await Document.findById(req.params.id);
+  // Populate owner so controllers can access owner.name / owner.email
+  const document = await Document.findById(req.params.id).populate('owner', 'name email');
 
   if (!document) {
     return next(new AppError('Document not found.', 404));
   }
 
-  // Check if user is owner or admin
-  if (document.owner.toString() !== req.user.id && req.user.role !== 'admin') {
+  // Compare populated owner._id to the logged-in user id
+  if (document.owner._id.toString() !== req.user.id && req.user.role !== 'admin') {
     return next(
       new AppError('You do not have permission to access this document.', 403)
     );
