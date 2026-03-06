@@ -78,6 +78,21 @@ app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/sign', signatureRoutes);
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    message: 'DigiSign API is running 🚀',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      auth: '/api/auth',
+      documents: '/api/documents',
+      sign: '/api/sign',
+    },
+  });
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
